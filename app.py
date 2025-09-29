@@ -1,144 +1,102 @@
 import streamlit as st
+from pdf2docx import Converter
+from pdf2image import convert_from_path
+from PyPDF2 import PdfMerger, PdfReader, PdfWriter
+from fpdf import FPDF
+from PIL import Image
+import pandas as pd
 import os
-from conversions.pdf_to_word import pdf_to_word
-from conversions.word_to_pdf import word_to_pdf
-from conversions.pdf_to_jpg import pdf_to_jpg
-from conversions.jpg_to_pdf import jpg_to_pdf
-from conversions.pdf_split_merge import merge_pdfs, split_pdf
-from conversions.excel_pdf import pdf_to_excel, excel_to_pdf
-from conversions.deletion_certificate import generate_deletion_certificate
+import tempfile
 
-# Temporary storage
-TEMP_DIR = "temp_files"
-os.makedirs(TEMP_DIR, exist_ok=True)
+st.set_page_config(page_title="All-in-One PDF Tool", layout="wide")
+st.title("📄 All-in-One PDF Tool")
 
-st.set_page_config(page_title="AllPDF Converter", layout="wide")
-st.title("📄 AllPDF Multi-File Converter")
+# Create temporary folder
+tmp_dir = tempfile.mkdtemp()
 
-# --- Checkbox Acknowledgment ---
-ack = st.checkbox(
-    "I acknowledge that files uploaded will be temporarily processed and deleted after download"
-)
+# -----------------------
+# PDF → DOCX
+# -----------------------
+st.header("PDF → DOCX")
+pdf_file = st.file_uploader("Upload PDF for conversion", type="pdf", key="pdf2docx")
+if pdf_file:
+    output_path = os.path.join(tmp_dir, "converted.docx")
+    with open(os.path.join(tmp_dir, pdf_file.name), "wb") as f:
+        f.write(pdf_file.getbuffer())
+    converter = Converter(os.path.join(tmp_dir, pdf_file.name))
+    converter.convert(output_path, start=0, end=None)
+    converter.close()
+    st.success("PDF converted to DOCX successfully!")
+    st.download_button("Download DOCX", output_path, "converted.docx")
 
-if ack:
+# -----------------------
+# PDF → Images
+# -----------------------
+st.header("PDF → Images")
+pdf_img_file = st.file_uploader("Upload PDF to convert to images", type="pdf", key="pdf2img")
+if pdf_img_file:
+    pdf_path = os.path.join(tmp_dir, pdf_img_file.name)
+    with open(pdf_path, "wb") as f:
+        f.write(pdf_img_file.getbuffer())
+    images = convert_from_path(pdf_path)
+    img_files = []
+    for i, img in enumerate(images):
+        img_path = os.path.join(tmp_dir, f"page_{i+1}.jpg")
+        img.save(img_path, "JPEG")
+        img_files.append(img_path)
+    st.success(f"PDF converted to {len(images)} image(s)!")
+    for img_file in img_files:
+        st.image(img_file, use_column_width=True)
+        st.download_button(f"Download {os.path.basename(img_file)}", img_file, os.path.basename(img_file))
 
-    # --- Conversion Type ---
-    option = st.selectbox(
-        "Select Conversion Type",
-        [
-            "PDF → Word",
-            "Word → PDF",
-            "PDF → JPG",
-            "JPG → PDF",
-            "PDF Split",
-            "PDF Merge",
-            "PDF → Excel",
-            "Excel → PDF"
-        ]
-    )
+# -----------------------
+# Images → PDF
+# -----------------------
+st.header("Images → PDF")
+img_files = st.file_uploader("Upload images (JPG/PNG) to merge into PDF", type=["jpg","jpeg","png"], accept_multiple_files=True, key="img2pdf")
+if img_files:
+    pdf_output = os.path.join(tmp_dir, "merged.pdf")
+    pdf = FPDF()
+    for img_file in img_files:
+        image = Image.open(img_file)
+        pdf.add_page()
+        pdf.image(img_file, x=0, y=0, w=210, h=297)
+    pdf.output(pdf_output)
+    st.success("Images merged into PDF successfully!")
+    st.download_button("Download PDF", pdf_output, "merged.pdf")
 
-    # --- File Upload ---
-    uploaded_files = st.file_uploader(
-        "Upload your file(s) (Max 200 MB per file)",
-        type=["pdf","docx","jpg","xlsx","csv"],
-        accept_multiple_files=True
-    )
+# -----------------------
+# Merge PDFs
+# -----------------------
+st.header("Merge PDFs")
+merge_pdfs = st.file_uploader("Upload PDFs to merge", type="pdf", accept_multiple_files=True, key="mergepdf")
+if merge_pdfs:
+    merger = PdfMerger()
+    for pdf_file in merge_pdfs:
+        merger.append(pdf_file)
+    merged_output = os.path.join(tmp_dir, "merged_output.pdf")
+    merger.write(merged_output)
+    merger.close()
+    st.success("PDFs merged successfully!")
+    st.download_button("Download Merged PDF", merged_output, "merged.pdf")
 
-    if uploaded_files and st.button("Convert"):
-
-        converted_files = []
-
-        for uploaded_file in uploaded_files:
-
-            if uploaded_file.size > 200 * 1024 * 1024:
-                st.error(f"{uploaded_file.name} exceeds 200 MB limit.")
-                continue
-
-            file_path = os.path.join(TEMP_DIR, uploaded_file.name)
-            with open(file_path, "wb") as f:
-                f.write(uploaded_file.getbuffer())
-
-            try:
-                # --- Conversion Logic ---
-                if option == "PDF → Word":
-                    output_file = file_path.replace(".pdf", ".docx")
-                    pdf_to_word(file_path, output_file)
-                    converted_files.append(output_file)
-
-                elif option == "Word → PDF":
-                    output_file = file_path.replace(".docx", ".pdf")
-                    word_to_pdf(file_path, output_file)
-                    converted_files.append(output_file)
-
-                elif option == "PDF → JPG":
-                    output_files = pdf_to_jpg(file_path, TEMP_DIR)
-                    for f in output_files:
-                        st.download_button(
-                            "Download " + os.path.basename(f),
-                            open(f, "rb"),
-                            file_name=os.path.basename(f)
-                        )
-                    continue
-
-                elif option == "JPG → PDF":
-                    output_file = file_path.replace(".jpg", ".pdf")
-                    jpg_to_pdf([file_path], output_file)
-                    converted_files.append(output_file)
-
-                elif option == "PDF Split":
-                    output_files = split_pdf(file_path, TEMP_DIR)
-                    for f in output_files:
-                        st.download_button(
-                            "Download " + os.path.basename(f),
-                            open(f, "rb"),
-                            file_name=os.path.basename(f)
-                        )
-                    continue
-
-                elif option == "PDF Merge":
-                    if len(uploaded_files) < 2:
-                        st.error("Select at least 2 PDFs to merge.")
-                        continue
-                    merge_list = [os.path.join(TEMP_DIR, f.name) for f in uploaded_files]
-                    output_file = os.path.join(TEMP_DIR, "merged.pdf")
-                    merge_pdfs(merge_list, output_file)
-                    converted_files.append(output_file)
-
-                elif option == "PDF → Excel":
-                    output_file = file_path.replace(".pdf", ".csv")
-                    pdf_to_excel(file_path, output_file)
-                    converted_files.append(output_file)
-
-                elif option == "Excel → PDF":
-                    output_file = file_path.replace(".xlsx", ".pdf")
-                    excel_to_pdf(file_path, output_file)
-                    converted_files.append(output_file)
-
-                else:
-                    st.error("Option not implemented.")
-                    continue
-
-            except Exception as e:
-                st.error(f"Error converting {uploaded_file.name}: {e}")
-
-        # --- Download Converted Files ---
-        for f in converted_files:
-            st.download_button(
-                "Download " + os.path.basename(f),
-                open(f, "rb"),
-                file_name=os.path.basename(f)
-            )
-
-        # --- Deletion Certificate ---
-        if converted_files:
-            if st.button("Generate Deletion Certificate"):
-                cert_file = generate_deletion_certificate(
-                    user_name="Anonymous",
-                    files_deleted=[os.path.basename(f) for f in converted_files]
-                )
-                st.success("Deletion certificate generated!")
-                st.download_button(
-                    "Download Deletion Certificate",
-                    open(cert_file, "rb"),
-                    file_name=os.path.basename(cert_file)
-                )
+# -----------------------
+# Split PDF
+# -----------------------
+st.header("Split PDF")
+split_pdf_file = st.file_uploader("Upload PDF to split", type="pdf", key="splitpdf")
+if split_pdf_file:
+    reader = PdfReader(split_pdf_file)
+    num_pages = len(reader.pages)
+    st.write(f"Total Pages: {num_pages}")
+    start_page = st.number_input("Start Page", min_value=1, max_value=num_pages, value=1)
+    end_page = st.number_input("End Page", min_value=1, max_value=num_pages, value=num_pages)
+    if st.button("Split PDF"):
+        writer = PdfWriter()
+        for i in range(start_page-1, end_page):
+            writer.add_page(reader.pages[i])
+        split_output = os.path.join(tmp_dir, f"split_{split_pdf_file.name}")
+        with open(split_output, "wb") as f:
+            writer.write(f)
+        st.success("PDF split successfully!")
+        st.download_button("Download Split PDF", split_output, f"split_{split_pdf_file.name}")
